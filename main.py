@@ -8,7 +8,8 @@ import resend
 # 1. 환경 변수 및 클라이언트 설정
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 RESEND_API_KEY = os.getenv("RESEND_API_KEY")
-RECIPIENT_EMAIL = os.getenv("RECIPIENT_EMAIL", "dgcnyb@gmail.com")
+# 이메일 주소 공백 자동 제거 및 기본값 지정
+RECIPIENT_EMAIL = os.getenv("RECIPIENT_EMAIL", "dgcnyb@gmail.com").strip()
 
 resend.api_key = RESEND_API_KEY
 ai_client = genai.Client(api_key=GEMINI_API_KEY)
@@ -53,7 +54,7 @@ TARGET_KEYWORDS = [
 ]
 
 def is_relevant_article(title, summary):
-    """제목 및 요약문에서 도료/고분자 키워드를 대소문자 구분 없이 필터링합니다."""
+    """제목 및 요약문에서 도료/고분자 키워드를 필터링합니다."""
     text_to_check = f"{title} {summary}".lower()
     return any(keyword in text_to_check for keyword in TARGET_KEYWORDS)
 
@@ -73,11 +74,9 @@ def fetch_articles(limit_per_feed=3, max_total=7):
                 link = entry.get("link", "")
                 rss_summary = entry.get("summary", "")
                 
-                # 특허 피드는 이미 검색 쿼리가 걸려있으므로 바로 통과, 일반 피드는 키워드 필터링
                 if feed_info["type"] != "특허" and not is_relevant_article(title, rss_summary):
                     continue
 
-                # 본문 텍스트 추출 (특허 사이트나 일반 뉴스 페이지 대응)
                 downloaded = trafilatura.fetch_url(link)
                 text_content = trafilatura.extract(downloaded) if downloaded else ""
                 
@@ -104,7 +103,7 @@ def fetch_articles(limit_per_feed=3, max_total=7):
     return articles
 
 def summarize_with_gemini(article):
-    """도료/고분자 화학 수석 연구원 관점에서 특허 및 기술을 정밀 분석합니다."""
+    """최신 gemini-3.8-flash 모델을 사용하여 분석 요약을 생성합니다."""
     prompt = f"""
     당신은 도료·코팅 및 고분자 화학 분야의 R&D 수석 연구원입니다.
     아래 기술 정보(분류: {article['category']})를 분석하여 동료 연구원들을 위한 브리핑을 작성해 주세요.
@@ -120,8 +119,9 @@ def summarize_with_gemini(article):
     - 불필요한 서두나 결론 인사말은 완전히 생략하고 내용만 출력
     """
     try:
+        # 모델을 최신 지원 모델인 gemini-3.8-flash 로 지정
         response = ai_client.models.generate_content(
-            model="gemini-2.5-flash",
+            model="gemini-3.8-flash",
             contents=prompt
         )
         return response.text.replace("\n", "<br>")
@@ -130,13 +130,12 @@ def summarize_with_gemini(article):
         return "기술 요약을 생성하지 못했습니다."
 
 def build_html_email(summarized_articles, today_str):
-    """카테고리 뱃지(특허, 원료사동향, 도료기술)가 적용된 전문 R&D HTML 메일 템플릿"""
     category_colors = {
-        "특허": {"bg": "#fee2e2", "text": "#b91c1c"},      # 레드/버건디 계열
-        "원료사동향": {"bg": "#fef3c7", "text": "#b45309"},  # 앰버/오렌지 계열
-        "도료기술": {"bg": "#e0f2fe", "text": "#0369a1"},    # 블루 계열
-        "학술/논문": {"bg": "#f3e8ff", "text": "#7e22ce"},   # 퍼플 계열
-        "산업동향": {"bg": "#f1f5f9", "text": "#475569"}     # 그레이 계열
+        "특허": {"bg": "#fee2e2", "text": "#b91c1c"},
+        "원료사동향": {"bg": "#fef3c7", "text": "#b45309"},
+        "도료기술": {"bg": "#e0f2fe", "text": "#0369a1"},
+        "학술/논문": {"bg": "#f3e8ff", "text": "#7e22ce"},
+        "산업동향": {"bg": "#f1f5f9", "text": "#475569"}
     }
 
     cards_html = ""
@@ -207,10 +206,13 @@ def main():
         
     html_content = build_html_email(summarized_articles, today_str)
     
-    print(f"{RECIPIENT_EMAIL} 주소로 발송 중...")
+    # 수신 이메일 주소 확정 (공백 방지)
+    target_email = RECIPIENT_EMAIL if "@" in RECIPIENT_EMAIL else "dgcnyb@gmail.com"
+    print(f"{target_email} 주소로 발송 중...")
+    
     params = {
         "from": "R&D Coatings Brief <onboarding@resend.dev>",
-        "to": [RECIPIENT_EMAIL],
+        "to": [target_email],
         "subject": f"[R&D 브리핑] {today_str} 도료 특허·원료사·기능성 코팅 기술 동향",
         "html": html_content,
     }
