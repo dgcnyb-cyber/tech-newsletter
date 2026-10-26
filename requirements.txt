@@ -1,0 +1,4 @@
+feedparser>=6.0.10
+google-genai>=0.1.1
+resend>=2.6.0
+trafilatura>=1.8.0
