@@ -1,67 +1,69 @@
 import os
+import urllib.request
+import socket
 from datetime import datetime, timezone, timedelta
 import feedparser
 import trafilatura
 from google import genai
 import resend
 
-# 1. 환경 변수 및 클라이언트 설정
+# 1. 환경 변수 및 설정
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 RESEND_API_KEY = os.getenv("RESEND_API_KEY")
-# 이메일 주소 공백 자동 제거 및 기본값 지정
 RECIPIENT_EMAIL = os.getenv("RECIPIENT_EMAIL", "dgcnyb@gmail.com").strip()
+
+# 전체 네트워크 요청 타임아웃 7초로 강제 제한 (10분 멈춤 방지)
+socket.setdefaulttimeout(7)
 
 resend.api_key = RESEND_API_KEY
 ai_client = genai.Client(api_key=GEMINI_API_KEY)
 
-# 2. 도료·코팅 전문 매체, 글로벌 원료사, 특허 모니터링 RSS 소스
+# 2. 도료·코팅 전문 매체, 원료사, 특허 RSS 소스 (응답 빠른 안정적 소스 위주)
 RSS_FEEDS = [
-    # [코팅 & 도료 전문 저널]
     {"source": "Coatings World", "type": "산업동향", "url": "https://www.coatingsworld.com/rss/all"},
     {"source": "PCI Magazine", "type": "도료기술", "url": "https://www.pcimag.com/rss/articles"},
     {"source": "European Coatings", "type": "도료기술", "url": "https://www.european-coatings.com/rss/news"},
-    {"source": "Progress in Organic Coatings", "type": "학술/논문", "url": "https://rss.sciencedirect.com/publication/science/03009440"},
-
-    # [글로벌 화학·원료사 뉴스룸]
+    {"source": "ScienceDirect (Coatings)", "type": "학술/논문", "url": "https://rss.sciencedirect.com/publication/science/03009440"},
     {"source": "BASF News", "type": "원료사동향", "url": "https://www.basf.com/global/en/media/news-releases.rss"},
-    {"source": "Dow Newsroom", "type": "원료사동향", "url": "https://corporate.dow.com/en-us/news/press-releases.rss"},
     {"source": "Evonik News", "type": "원료사동향", "url": "https://corporate.evonik.com/en/media/press-releases.rss"},
-
-    # [글로벌 특허 모니터링 (Google Patents Atom Feed)]
     {
-        "source": "Google Patents (Road Marking)",
+        "source": "Google Patents (Road Marking & Coating)",
         "type": "특허",
-        "url": "https://patents.google.com/feeds/search?q=(road+marking+paint+OR+traffic+paint)+AND+coating&sort=new&num=10"
-    },
-    {
-        "source": "Google Patents (Functional Coating & Binder)",
-        "type": "특허",
-        "url": "https://patents.google.com/feeds/search?q=(anti-icing+OR+anti-corrosion+OR+self-healing)+AND+(coating+OR+binder)&sort=new&num=10"
+        "url": "https://patents.google.com/feeds/search?q=(road+marking+paint+OR+traffic+paint)+AND+coating&sort=new&num=5"
     }
 ]
 
 # 3. 도료 및 고분자 연구 핵심 필터링 키워드
 TARGET_KEYWORDS = [
-    # 도료/코팅 및 노면표지
     "coating", "paint", "road marking", "traffic paint", "pavement",
     "architectural", "protective coating", "waterborne", "solvent-free",
     "anti-corrosion", "anti-icing", "weatherability", "retroreflectivity",
-    
-    # 바인더, 수지 및 첨가제 원료 기술
     "polymer", "resin", "binder", "emulsion", "polyurethane", "acrylic", 
     "epoxy", "crosslinker", "encapsulat", "nanocomposite", "dispersion",
     "additive", "curing", "functional polymer", "silane"
 ]
 
 def is_relevant_article(title, summary):
-    """제목 및 요약문에서 도료/고분자 키워드를 필터링합니다."""
     text_to_check = f"{title} {summary}".lower()
     return any(keyword in text_to_check for keyword in TARGET_KEYWORDS)
 
-def fetch_articles(limit_per_feed=3, max_total=7):
-    """각 RSS 피드에서 관련 기사 및 최신 특허를 수집합니다."""
+def safe_fetch_text(url, default_text=""):
+    """타임아웃을 엄격히 적용하여 웹페이지 본문을 가져옵니다."""
+    try:
+        req = urllib.request.Request(
+            url, 
+            headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+        )
+        with urllib.request.urlopen(req, timeout=5) as response:
+            html = response.read().decode('utf-8', errors='ignore')
+            extracted = trafilatura.extract(html)
+            return extracted[:2500] if extracted else default_text[:1200]
+    except Exception:
+        # 응답이 늦거나 차단되면 기다리지 않고 RSS 기본 요약문으로 즉시 대체
+        return default_text[:1200]
+
+def fetch_articles(limit_per_feed=2, max_total=6):
     articles = []
-    
     for feed_info in RSS_FEEDS:
         try:
             feed = feedparser.parse(feed_info["url"])
@@ -77,33 +79,27 @@ def fetch_articles(limit_per_feed=3, max_total=7):
                 if feed_info["type"] != "특허" and not is_relevant_article(title, rss_summary):
                     continue
 
-                downloaded = trafilatura.fetch_url(link)
-                text_content = trafilatura.extract(downloaded) if downloaded else ""
-                
-                if not text_content:
-                    text_content = rss_summary[:1200]
-                else:
-                    text_content = text_content[:2500]
+                # 타임아웃 안전 장치 적용 본문 추출
+                text_content = safe_fetch_text(link, default_text=rss_summary)
 
                 articles.append({
                     "source": feed_info["source"],
                     "category": feed_info["type"],
                     "title": title,
                     "link": link,
-                    "content": text_content
+                    "content": text_content if text_content else title
                 })
                 count += 1
                 
                 if len(articles) >= max_total:
                     return articles
         except Exception as e:
-            print(f"[{feed_info['source']}] 피드 수집 실패: {e}")
+            print(f"[{feed_info['source']}] 피드 수집 스킵: {e}")
             continue
 
     return articles
 
 def summarize_with_gemini(article):
-    """최신 gemini-3.8-flash 모델을 사용하여 분석 요약을 생성합니다."""
     prompt = f"""
     당신은 도료·코팅 및 고분자 화학 분야의 R&D 수석 연구원입니다.
     아래 기술 정보(분류: {article['category']})를 분석하여 동료 연구원들을 위한 브리핑을 작성해 주세요.
@@ -112,14 +108,13 @@ def summarize_with_gemini(article):
     [본문 내용]: {article['content']}
 
     [작성 가이드]:
-    - 한국어로 전문적이고 명확하게 작성할 것
-    - 분류가 '특허'인 경우: 주요 청구 특징/핵심 기술 구성(바인더, 첨가제, 경화 방식) 및 해결하고자 한 종래 기술의 과제를 명시
-    - 분류가 '원료사동향' 또는 '도료기술'인 경우: 수지/바인더 특성, 물성 개선 효과(내구성, 내후성, 친환경 수용화 등)와 배합 처방 관점의 의의 기술
-    - 글머리 기호(-)를 활용해 2~3줄로 작성
-    - 불필요한 서두나 결론 인사말은 완전히 생략하고 내용만 출력
+    - 한국어로 전문적이고 간결하게 작성할 것
+    - 분류가 '특허'인 경우: 핵심 기술 구성(바인더/첨가제/경화계) 및 해결 과제 명시
+    - 분류가 '원료사동향' 또는 '도료기술'인 경우: 수지/바인더 특성, 물성 개선 효과(내구성, 내후성 등)와 배합 처방 관점의 의의 기술
+    - 글머리 기호(-)로 2~3줄 요약
+    - 불필요한 인사말이나 서두는 생략
     """
     try:
-        # 모델을 최신 지원 모델인 gemini-3.8-flash 로 지정
         response = ai_client.models.generate_content(
             model="gemini-3.8-flash",
             contents=prompt
@@ -165,7 +160,7 @@ def build_html_email(summarized_articles, today_str):
         """
 
     if not cards_html:
-        cards_html = "<p style='color: #64748b; font-size: 14px;'>금일 모니터링된 신규 특허 및 원료/도료 기술 기사가 없습니다.</p>"
+        cards_html = "<p style='color: #64748b; font-size: 14px;'>금일 모니터링된 신규 기술 기사가 없습니다.</p>"
 
     html = f"""
     <!DOCTYPE html>
@@ -176,7 +171,7 @@ def build_html_email(summarized_articles, today_str):
             <header style="border-bottom: 2px solid #0f172a; padding-bottom: 14px; margin-bottom: 24px;">
                 <div style="font-size: 11px; font-weight: 700; color: #0284c7; letter-spacing: 0.5px; text-transform: uppercase; margin-bottom: 4px;">R&D Intelligence Briefing</div>
                 <h2 style="margin: 0; font-size: 21px; color: #0f172a;">🧪 도료·코팅 & 고분자 재료 기술 동향</h2>
-                <p style="margin: 6px 0 0 0; color: #64748b; font-size: 13px;">{today_str} | 특허·원료사(BASF/Dow/Evonik)·노면표지·기능성 바인더 동향</p>
+                <p style="margin: 6px 0 0 0; color: #64748b; font-size: 13px;">{today_str} | 특허·원료사·노면표지·기능성 바인더 동향</p>
             </header>
             
             {cards_html}
@@ -194,21 +189,20 @@ def main():
     kst = timezone(timedelta(hours=9))
     today_str = datetime.now(kst).strftime("%Y년 %m월 %d일")
     
-    print(f"[{today_str}] 특허, 원료사, 도료 기술 기사 통합 수집 시작...")
-    articles = fetch_articles(limit_per_feed=3, max_total=7)
+    print(f"[{today_str}] 수집 시작...")
+    articles = fetch_articles(limit_per_feed=2, max_total=5)
     print(f"수집 완료: 총 {len(articles)}개 항목")
     
     summarized_articles = []
     for art in articles:
-        print(f"[{art['category']}] 분석 및 요약 중: {art['title']}")
+        print(f"[{art['category']}] 요약 중: {art['title']}")
         art["summary"] = summarize_with_gemini(art)
         summarized_articles.append(art)
         
     html_content = build_html_email(summarized_articles, today_str)
     
-    # 수신 이메일 주소 확정 (공백 방지)
     target_email = RECIPIENT_EMAIL if "@" in RECIPIENT_EMAIL else "dgcnyb@gmail.com"
-    print(f"{target_email} 주소로 발송 중...")
+    print(f"{target_email} 메일 발송 중...")
     
     params = {
         "from": "R&D Coatings Brief <onboarding@resend.dev>",
@@ -218,7 +212,7 @@ def main():
     }
     
     response = resend.Emails.send(params)
-    print("메일 발송 성공:", response)
+    print("메일 발송 완료:", response)
 
 if __name__ == "__main__":
     main()
