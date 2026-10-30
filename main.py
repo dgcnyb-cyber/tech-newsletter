@@ -8,7 +8,7 @@ import resend
 # 1. 환경 변수 설정
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 RESEND_API_KEY = os.getenv("RESEND_API_KEY")
-RECIPIENT_EMAIL = os.getenv("RECIPIENT_EMAIL", "dgcnyb@gmail.com").strip()
+RECIPIENT_EMAIL = "dgcnyb@gmail.com"
 
 resend.api_key = RESEND_API_KEY
 ai_client = genai.Client(api_key=GEMINI_API_KEY)
