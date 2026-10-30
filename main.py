@@ -8,17 +8,18 @@ import resend
 # 1. 환경 변수 설정
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 RESEND_API_KEY = os.getenv("RESEND_API_KEY")
-RECIPIENT_EMAIL = "dgcnyb@gmail.com"
+
+# 수신 주소를 리스트 안에 직접 명시하여 유효성 에러 원천 차단
+TARGET_RECIPIENTS = ["dgcnyb@gmail.com"]
 
 resend.api_key = RESEND_API_KEY
 ai_client = genai.Client(api_key=GEMINI_API_KEY)
 
-# 2. 가장 응답이 빠르고 확실한 전문 도료/화학 RSS 소스만 엄선
+# 2. 도료/화학 RSS 소스
 RSS_FEEDS = [
     {"source": "Coatings World", "type": "산업동향", "url": "https://www.coatingsworld.com/rss/all"},
     {"source": "PCI Magazine", "type": "도료기술", "url": "https://www.pcimag.com/rss/articles"},
     {"source": "European Coatings", "type": "도료기술", "url": "https://www.european-coatings.com/rss/news"},
-    {"source": "BASF News", "type": "원료사동향", "url": "https://www.basf.com/global/en/media/news-releases.rss"},
 ]
 
 # 3. 도료 및 고분자 연구 필터링 키워드
@@ -32,7 +33,6 @@ TARGET_KEYWORDS = [
 ]
 
 def fetch_feed_safely(url, timeout=5):
-    """5초 이내에 응답이 없으면 즉시 끊어버리는 안전한 RSS 수집 함수"""
     try:
         req = urllib.request.Request(
             url, 
@@ -42,7 +42,7 @@ def fetch_feed_safely(url, timeout=5):
             content = resp.read()
             return feedparser.parse(content)
     except Exception as e:
-        print(f"[{url}] 수집 건너뜀 (지연/차단): {e}")
+        print(f"[{url}] 수집 건너뜀: {e}")
         return None
 
 def is_relevant(title, summary):
@@ -61,11 +61,9 @@ def collect_articles(max_total=5):
             link = entry.get("link", "").strip()
             summary = entry.get("summary", "").strip()
             
-            # 본문 스크래핑 대신 RSS 자체 요약문을 활용해 딜레이 0초 달성
             if not summary:
                 summary = title
 
-            # 키워드가 매칭되거나, 피드 첫 번째 주요 기사인 경우 수집
             if is_relevant(title, summary) or len(articles) < 2:
                 articles.append({
                     "source": f["source"],
@@ -105,7 +103,6 @@ def summarize_with_gemini(article):
 
 def build_html_email(summarized_articles, today_str):
     category_colors = {
-        "원료사동향": {"bg": "#fef3c7", "text": "#b45309"},
         "도료기술": {"bg": "#e0f2fe", "text": "#0369a1"},
         "산업동향": {"bg": "#f1f5f9", "text": "#475569"}
     }
@@ -174,18 +171,16 @@ def main():
         
     html_content = build_html_email(summarized, today_str)
     
-    target_email = RECIPIENT_EMAIL if "@" in RECIPIENT_EMAIL else "dgcnyb@gmail.com"
-    print(f"{target_email} 메일 발송 중...")
-    
+    print("dgcnyb@gmail.com 메일 발송 중...")
     params = {
         "from": "R&D Coatings Brief <onboarding@resend.dev>",
-        "to": [target_email],
+        "to": TARGET_RECIPIENTS,
         "subject": f"[R&D 브리핑] {today_str} 도료·코팅 및 고분자 기술 동향",
         "html": html_content,
     }
     
     response = resend.Emails.send(params)
-    print("성공:", response)
+    print("메일 발송 완료:", response)
 
 if __name__ == "__main__":
     main()
